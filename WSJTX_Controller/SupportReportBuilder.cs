@@ -657,12 +657,11 @@ namespace WSJTX_Controller
                 : Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
         }
 
+        // Resolves through JimmySettings.IniPath so a replay run with JIMMY_TEST_INI_PATH
+        // set reports on the settings file Jimmy actually loaded, not the operator's real one.
         private static string GetIniPath()
         {
-            string name = Assembly.GetExecutingAssembly().GetName().Name;
-            return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                name, name + ".ini");
+            return JimmySettings.IniPath;
         }
 
         private static string GetLogDir()

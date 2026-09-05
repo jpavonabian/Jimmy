@@ -127,6 +127,7 @@
     <Compile Include="HotkeyConfig.cs" />
     <Compile Include="UpdateChecker.cs" />
     <Compile Include="DxSpotWatcher.cs" />
+    <Compile Include="AutoReplyFilter.cs" />
     <Compile Include="CallQueueRanker.cs" />
     <Compile Include="JimmySettings.cs" />
     <Compile Include="IJimmyView.cs" />

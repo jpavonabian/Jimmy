@@ -1100,9 +1100,41 @@ namespace WSJTX_Controller
                     return;
                 }
 
+                // ── Simple Autoreply mode ────────────────────────────────────────────
+                // This is the path taken by stations answering our own CQ. When the mode
+                // is on it owns the decision here, replacing the Receive-tab weak-signal
+                // floor and the "ignore non-DX" gate below with its own filter set.
+                // Never applied to the station we are actively working, nor to a 73/RR73:
+                // a QSO already under way must always be allowed to finish.
+                if (ctrl.AutoReply.Enabled && deCall != callInProg && !dmsg.Is73orRR73())
+                {
+                    string autoReplyReason;
+                    if (!ctrl.AutoReply.ReplyToMyCallers)
+                    {
+                        if (debugDetail) DebugOutput($"{spacer}{deCall} ignored, Simple Autoreply not replying to our own callers");
+                        if (callQueue.Contains(deCall)) _callQueueStore.RemoveCall(deCall);
+                        RejectCallerInCqMode(deCall, "not replying to our own callers");
+                        return;
+                    }
+                    // applyNewDxccFilter is false here on purpose: this station is already
+                    // calling us, and turning it away because its entity is in the log
+                    // would throw away a QSO that is half made. "Only new DXCC" governs
+                    // who Jimmy goes out and calls, not who it answers.
+                    if (!ctrl.AutoReply.Accepts(dmsg, deCall, true,
+                                                applyNewDxccFilter: false,
+                                                isDxccUnconfirmed: false, out autoReplyReason))
+                    {
+                        StatusView.ShowMessage($"{deCall} ignored ({autoReplyReason})", false);
+                        DebugOutput($"{spacer}{deCall} ignored by Simple Autoreply: {autoReplyReason}");
+                        if (callQueue.Contains(deCall)) _callQueueStore.RemoveCall(deCall);
+                        RejectCallerInCqMode(deCall, autoReplyReason);
+                        return;
+                    }
+                }
+
                 // Weak-signal floor: never suppress the station we're actively working —
                 // SNR can dip on a final RR73/73 and we must not drop a QSO in progress.
-                if (ctrl.ignoreWeakSnrCheckBox.Checked && dmsg.Snr <= (int)ctrl.minSnrNumUpDown.Value && deCall != callInProg)
+                if (!ctrl.AutoReply.Enabled && ctrl.ignoreWeakSnrCheckBox.Checked && dmsg.Snr <= (int)ctrl.minSnrNumUpDown.Value && deCall != callInProg)
                 {
                     if (debugDetail) DebugOutput($"{spacer}{deCall} ignored, weak signal snr:{dmsg.Snr} floor:{(int)ctrl.minSnrNumUpDown.Value}");
                     // Default: just stop refreshing this station's queue entry -- it lingers
@@ -1116,7 +1148,9 @@ namespace WSJTX_Controller
 
                 DebugOutput($"{spacer}deCall:{deCall} dmsg.Priority:{dmsg.Priority} callQueue.Contains:{callQueue.Contains(deCall)} SentAnyMsg:{SentAnyMsg(deCall)}");
                 //if calling CQ DX and ignore non-DX replies
-                if (!dmsg.IsDx
+                //(Simple Autoreply owns geography via its own station list -- see above)
+                if (!ctrl.AutoReply.Enabled
+                    && !dmsg.IsDx
                     && dmsg.Priority > (int)CallPriority.NEW_COUNTRY_ON_BAND
                     && txMode == TxModes.CALL_CQ
                     && ctrl.callCqDxCheckBox.Checked
@@ -1545,7 +1579,39 @@ namespace WSJTX_Controller
                 DebugOutput($"{spacer}auto freq update disabled while CQ mode previously in progress");
             }
 
-            if ((((txTimeout || !txEnabled) && txMode == TxModes.LISTEN) || (!cqPaused && txMode == TxModes.CALL_CQ)) && callInProg != null && callQueue.Contains(callInProg))
+            // ── Simple Autoreply: unattended call selection ──────────────────────────
+            // AddSelectedCall only decides what enters the queue; on its own that changes
+            // nothing, because neither transmit mode ever starts a QSO by itself. Call CQ
+            // keeps calling CQ (CheckNextXmit -> SetupCq) and Listen waits for the
+            // operator's Alt+N / Enter -- ReplyTo is otherwise reachable only from the
+            // resume-in-progress branch below or from NextCall, which is operator-driven.
+            // Turning on "reply to stations calling CQ" is the operator asking Jimmy to
+            // work them unattended, so this picks the top-ranked queued station in either
+            // transmit mode.
+            //
+            // Placed as the first arm of this chain, not before it, so the cycle that
+            // auto-selects does not also run the CQ-setup path and immediately undo it.
+            // Deliberately narrow -- it never pre-empts a QSO already under way, a held
+            // call, a paused CQ, an in-flight frequency update, or an active transmission.
+            // NextCall's dispatch clears txTimeout/xmitCycleCount exactly as an operator
+            // selection would; if it aborts (queue emptied first) the next decode cycle
+            // falls through to CheckNextXmit as usual.
+            bool autoReplySelect = ctrl.AutoReply.Enabled && ctrl.AutoReply.ReplyToCqCallers
+                                   && callInProg == null
+                                   && callQueue.Count > 0
+                                   // cqPaused is about CQ calling, not about Listen mode, where it
+                                   // is either structurally true or simply never cleared. Gate on it
+                                   // only in Call CQ, exactly as the resume branch below does.
+                                   && (txMode == TxModes.LISTEN || !cqPaused)
+                                   && !transmitting
+                                   && !ctrl.holdCheckBox.Checked
+                                   && autoFreqPauseMode == autoFreqPauseModes.DISABLED;
+            if (autoReplySelect)
+            {
+                DebugOutput($"{spacer}Simple Autoreply: auto-selecting '{GetCallAtIndex(0)}' from queue, txMode:{txMode}");
+                NextCall(false, 0);
+            }
+            else if ((((txTimeout || !txEnabled) && txMode == TxModes.LISTEN) || (!cqPaused && txMode == TxModes.CALL_CQ)) && callInProg != null && callQueue.Contains(callInProg))
             {
                 DebugOutput($"{spacer}resume '{discardCall}' after timeout");
                 DisableAutoFreqPause();
@@ -3233,6 +3299,23 @@ namespace WSJTX_Controller
             confDlg.Owner = ctrl;
             confDlg.ShowDialog();
             return confDlg.DialogResult;
+        }
+
+        // Dropping a filtered caller out of Jimmy's queue is not enough in Call CQ mode.
+        // SetupCq leaves WSJT-X set up for "CQ, auto, call 1st", so its own auto-sequence
+        // would answer the very station Simple Autoreply just rejected -- the filter would
+        // be advisory, not effective. Re-issuing the CQ makes the next transmission a CQ
+        // instead of a reply. Verified against a live Jimmy: after a rejected caller Jimmy
+        // previously sent no command at all, leaving WSJT-X's last instruction standing.
+        //
+        // Narrow on purpose: only in Call CQ, only with no QSO under way and nothing being
+        // transmitted, so this can never interrupt a contact in progress. Callers already
+        // exclude callInProg and any 73/RR73 before reaching here.
+        private void RejectCallerInCqMode(string deCall, string reason)
+        {
+            if (txMode != TxModes.CALL_CQ || cqPaused || callInProg != null || transmitting) return;
+            DebugOutput($"{spacer}Simple Autoreply: re-issuing CQ over filtered caller '{deCall}' ({reason})");
+            SetupCq(true);
         }
 
         private void SetupCq(bool enableTx)

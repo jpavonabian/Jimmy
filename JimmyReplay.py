@@ -507,13 +507,20 @@ def build_heartbeat():
             _qstr(WSJT_ID) + _u32(3) + _qstr(WSJT_VERSION) + _qstr(WSJT_REVISION))
 
 
-def build_status(check="", tx_halt_clk=False, tx_enable_button=False, tx_enable_clk=False):
+def build_status(check="", tx_halt_clk=False, tx_enable_button=False, tx_enable_clk=False,
+                 decoding=False):
     # TxFirst=False → Jimmy transmits in odd periods, receives in even.
     # SinceMidnight=0ms in decode messages (even period) matches this.
     #
     # tx_halt_clk/tx_enable_button/tx_enable_clk let a test simulate WSJT-X
     # changing its own Enable Tx button state independently of Jimmy (e.g. the
     # Wait and Reply feature auto-resuming a stalled QSO) -- see group15 below.
+    #
+    # decoding drives WSJT-X's decode-start/decode-end transition. Toggling it
+    # false→true→false is what makes Jimmy start processDecodeTimer and therefore
+    # eventually run ProcessDecodes -- the transmit-decision path, which nothing
+    # else in this file reaches. Defaults to False so every existing test sends
+    # exactly the bytes it did before.
     return (
         MAGIC + _u32(2) + _u32(MSG_STATUS) +
         _qstr(WSJT_ID) +
@@ -524,7 +531,7 @@ def build_status(check="", tx_halt_clk=False, tx_enable_button=False, tx_enable_
         _qstr("FT8") +           # Tx mode
         _flag(False) +           # Tx enabled
         _flag(False) +           # Transmitting
-        _flag(False) +           # Decoding
+        _flag(decoding) +        # Decoding
         _u32(1500) +             # Rx DF
         _u32(1500) +             # Tx DF
         _qstr(MY_CALL) +         # DE call
@@ -551,7 +558,8 @@ def build_status(check="", tx_halt_clk=False, tx_enable_button=False, tx_enable_
 
 
 def build_enqueue(message_text, snr=-10, is_new_call=True, country="USA", continent="NA",
-                  since_midnight_ms=0, mode="FT8"):
+                  since_midnight_ms=0, mode="FT8",
+                  is_new_country=False, is_new_country_on_band=False):
     # since_midnight_ms controls the T/R period of the simulated decode:
     #   0ms     → even period (FT8: period 0; FT4: 0-6s range)
     #   15000ms → odd  period (FT8: period 1, 15-29s range = TX window with TxFirst=False)
@@ -571,8 +579,8 @@ def build_enqueue(message_text, snr=-10, is_new_call=True, country="USA", contin
         _flag(False) +           # Modifier
         _flag(is_new_call) +     # New call on band
         _flag(is_new_call) +     # New call any band
-        _flag(False) +           # New country on band
-        _flag(False) +           # New country
+        _flag(is_new_country_on_band) +  # New country on band
+        _flag(is_new_country) +          # New country
         _qstr(country) +
         _qstr(continent) +
         _i32(0) +                # Azimuth

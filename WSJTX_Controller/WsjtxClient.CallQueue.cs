@@ -123,6 +123,18 @@ namespace WSJTX_Controller
                     DebugOutput($"{spacer}WantedAnywhere alert: '{deCall}'");
                 }
 
+                // ── Simple Autoreply mode ────────────────────────────────────────────
+                // This is the path taken by stations calling CQ themselves (and other
+                // ordinary traffic). Stations answering *our* CQ never reach here -- they
+                // take ProcessDecodeMsg's TO_MYCALL branch, which has its own Simple
+                // Autoreply gate. With the mode on and "reply to CQ callers" off, Jimmy
+                // works only the people who called us, so nothing here is admitted.
+                if (ctrl.AutoReply.Enabled && !ctrl.AutoReply.ReplyToCqCallers)
+                {
+                    if (debugDetail) DebugOutput($"{spacer}AddSelectedCall rejected, Simple Autoreply not replying to CQ callers");
+                    return;
+                }
+
                 // Weak-signal floor: this is the path ordinary CQ traffic takes (as opposed to
                 // ProcessDecodeMsg's TO_MYCALL branch, which has its own identical check and never
                 // reaches this method) -- without it here, the floor only ever protected direct
@@ -131,7 +143,9 @@ namespace WSJTX_Controller
                 // and already bypass every other automatic filter below (see isAdmitted override),
                 // so this bypasses the same way. Never suppress the station we're actively working --
                 // SNR can dip on a final RR73/73 and we must not drop a QSO in progress.
-                if (emsg.AutoGen && ctrl.ignoreWeakSnrCheckBox.Checked
+                // In Simple Autoreply mode this floor is replaced by the mode's own
+                // (see the admission gate below), so it must not fire here as well.
+                if (!ctrl.AutoReply.Enabled && emsg.AutoGen && ctrl.ignoreWeakSnrCheckBox.Checked
                     && emsg.Snr <= (int)ctrl.minSnrNumUpDown.Value && deCall != callInProg)
                 {
                     if (debugDetail) DebugOutput($"{spacer}AddSelectedCall rejected, weak signal snr:{emsg.Snr} floor:{(int)ctrl.minSnrNumUpDown.Value}");
@@ -143,7 +157,11 @@ namespace WSJTX_Controller
                     return;
                 }
 
-                if (isCq)    //check for unwanted directed CQ
+                // Simple Autoreply can switch this gate off (answering "CQ JA" from Europe
+                // is bad practice, so it defaults to on there too) -- when it is off the
+                // unwantedCqList is neither consulted nor updated.
+                bool applyDirectedCqGate = !ctrl.AutoReply.Enabled || ctrl.AutoReply.ExcludeUnmatchedDirectedCq;
+                if (applyDirectedCqGate && isCq)    //check for unwanted directed CQ
                 {
                     if (isDirectedAlert || isAcceptableCq)      //acceptable CQ
                     {
@@ -164,7 +182,7 @@ namespace WSJTX_Controller
                         return;
                     }
                 }
-                else        //other than a CQ
+                else if (applyDirectedCqGate)        //other than a CQ
                 {
                     if (unwantedCqList.Contains(deCall))
                     {
@@ -193,7 +211,10 @@ namespace WSJTX_Controller
                 bool isNewDxccCategory = emsg.Category == CallCategory.NEW_COUNTRY
                                         || emsg.Category == CallCategory.NEW_COUNTRY_ON_BAND;
                 bool isStillNeededByActiveAward = _awardTagger.MatchedAwardRuleId(emsg) != null;
-                if (AwardMatcher.ShouldRejectAlreadyWorked(
+                // Simple Autoreply replaces this with its own "only new stations" switch,
+                // which is off by default -- repeat contacts are the expected behaviour
+                // for an operator who just wants to work whoever answers.
+                if (!ctrl.AutoReply.Enabled && AwardMatcher.ShouldRejectAlreadyWorked(
                         emsg.IsNewCallOnBand, isPota, isNewDxccCategory, isStillNeededByActiveAward))
                 {
                     DebugOutput($"{spacer}AddSelectedCall: already worked '{deCall}'");
@@ -214,7 +235,45 @@ namespace WSJTX_Controller
                 // never reach this method.  The case below is defensive insurance only — Jimmy
                 // should never hide a station that is calling us.
                 bool isAdmitted;
-                switch (emsg.Category)
+                string autoReplyReason = null;
+                if (ctrl.AutoReply.Enabled)
+                {
+                    // Simple Autoreply short-circuits the whole category/Call-Filters stack.
+                    // isDirectedAlert is folded in so a directed CQ the operator explicitly
+                    // alerts on still counts as "for us" even when it isn't for our continent.
+                    //
+                    // The leading !isCq is essential: isAcceptableCq is itself gated on isCq
+                    // (line 42), so it reads false for every decode that is not a CQ at all --
+                    // reports, RR73/73 and replies between other stations. Without this guard
+                    // the directed-CQ filter rejected all of that as "directed CQ not for us",
+                    // which is the same shape as the existing isWantedOrigin test just below.
+                    //
+                    // ShowsStationAvailable then narrows it back to what is actually callable:
+                    // a CQ or a 73/RR73. "Reply to everyone" means not filtering by award,
+                    // country or category -- it does not mean calling a station that this very
+                    // decode shows is mid-QSO with somebody else.
+                    if (!AutoReplyFilter.ShowsStationAvailable(emsg))
+                    {
+                        autoReplyReason = "station busy (not a CQ or sign-off)";
+                        isAdmitted = false;
+                    }
+                    else
+                    {
+                        // Only pay for the callsign lookup behind IsHrcDxccUnconfirmed when
+                        // the operator actually picked the "not confirmed" scope. Note this
+                        // cannot be read off emsg.Category: DeriveCategory is winner-take-all,
+                        // so a station that is both WAS_NEEDED and DXCC-unconfirmed is tagged
+                        // only as the former, and the DXCC fact would be lost.
+                        bool dxccUnconfirmed = ctrl.AutoReply.NeedsUnconfirmedDxccFlag
+                                               && _awardTagger.IsHrcDxccUnconfirmed(emsg);
+                        isAdmitted = ctrl.AutoReply.Accepts(emsg, deCall,
+                                                            !isCq || isAcceptableCq || isDirectedAlert,
+                                                            applyNewDxccFilter: true,
+                                                            isDxccUnconfirmed: dxccUnconfirmed,
+                                                            out autoReplyReason);
+                    }
+                }
+                else switch (emsg.Category)     //normal award/category admission stack
                 {
                     case CallCategory.TO_MYCALL:
                         // Always admit — queue admission is never gated by the "Calling Me"
@@ -333,7 +392,9 @@ namespace WSJTX_Controller
                     string notWantedReason;
                     var filterCat = (emsg.Category == CallCategory.POTA || emsg.Category == CallCategory.SOTA)
                                     ? CallCategory.WANTED_CQ : emsg.Category;
-                    if (!IsCallingEnabled(filterCat))
+                    if (ctrl.AutoReply.Enabled)
+                        notWantedReason = $"autoreply:{autoReplyReason}";
+                    else if (!IsCallingEnabled(filterCat))
                         notWantedReason = $"filter:{emsg.Category}";
                     else
                         notWantedReason = !isWantedMsgType ? "msgType" : !isWantedOrigin ? "origin" : !isWantedAzimuth ? "azimuth" : "newBand";

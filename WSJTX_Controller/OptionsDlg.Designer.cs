@@ -1,4 +1,4 @@
-
+﻿
 namespace WSJTX_Controller
 {
     partial class OptionsDlg
@@ -40,6 +40,8 @@ namespace WSJTX_Controller
             this.advUiPanel = new System.Windows.Forms.Panel();
             this.wantedCallsTabPage = new System.Windows.Forms.TabPage();
             this.wantedCallsPanel = new System.Windows.Forms.Panel();
+            this.simpleAutoReplyTabPage = new System.Windows.Forms.TabPage();
+            this.simpleAutoReplyPanel = new System.Windows.Forms.Panel();
             this.spotWatchTabPage = new System.Windows.Forms.TabPage();
             this.spotWatchPanel = new System.Windows.Forms.Panel();
             this.soundsTabPage = new System.Windows.Forms.TabPage();
@@ -94,6 +96,8 @@ namespace WSJTX_Controller
             this.advUiPanel.SuspendLayout();
             this.wantedCallsTabPage.SuspendLayout();
             this.wantedCallsPanel.SuspendLayout();
+            this.simpleAutoReplyTabPage.SuspendLayout();
+            this.simpleAutoReplyPanel.SuspendLayout();
             this.spotWatchTabPage.SuspendLayout();
             this.spotWatchPanel.SuspendLayout();
             this.soundsTabPage.SuspendLayout();
@@ -110,16 +114,17 @@ namespace WSJTX_Controller
             this.tabControl1.Controls.Add(this.basicTabPage);          // index 0
             this.tabControl1.Controls.Add(this.generalTabPage);       // index 1
             this.tabControl1.Controls.Add(this.receiveReplyTabPage);  // index 2
-            this.tabControl1.Controls.Add(this.transmitTabPage);      // index 3
-            this.tabControl1.Controls.Add(this.hotkeysTabPage);       // index 4
-            this.tabControl1.Controls.Add(this.advUiTabPage);         // index 5
-            this.tabControl1.Controls.Add(this.wantedCallsTabPage);   // index 6
-            this.tabControl1.Controls.Add(this.spotWatchTabPage);     // index 7
-            this.tabControl1.Controls.Add(this.soundsTabPage);        // index 8
-            this.tabControl1.Controls.Add(this.udpTabPage);           // index 9
-            this.tabControl1.Controls.Add(this.logbookSyncTabPage);   // index 10
-            this.tabControl1.Controls.Add(this.lookupTabPage);        // index 11
-            this.tabControl1.Controls.Add(this.appearanceTabPage);    // index 12
+            this.tabControl1.Controls.Add(this.simpleAutoReplyTabPage); // index 3
+            this.tabControl1.Controls.Add(this.transmitTabPage);      // index 4
+            this.tabControl1.Controls.Add(this.hotkeysTabPage);       // index 5
+            this.tabControl1.Controls.Add(this.advUiTabPage);         // index 6
+            this.tabControl1.Controls.Add(this.wantedCallsTabPage);   // index 7
+            this.tabControl1.Controls.Add(this.spotWatchTabPage);     // index 8
+            this.tabControl1.Controls.Add(this.soundsTabPage);        // index 9
+            this.tabControl1.Controls.Add(this.udpTabPage);           // index 10
+            this.tabControl1.Controls.Add(this.logbookSyncTabPage);   // index 11
+            this.tabControl1.Controls.Add(this.lookupTabPage);        // index 12
+            this.tabControl1.Controls.Add(this.appearanceTabPage);    // index 13
             this.tabControl1.Location = new System.Drawing.Point(0, 0);
             this.tabControl1.Multiline = true;
             this.tabControl1.Name = "tabControl1";
@@ -295,6 +300,19 @@ namespace WSJTX_Controller
             this.wantedCallsPanel.AutoScroll = true;
             this.wantedCallsPanel.Dock = System.Windows.Forms.DockStyle.Fill;
             this.wantedCallsPanel.Name = "wantedCallsPanel";
+            //
+            // simpleAutoReplyTabPage
+            //
+            this.simpleAutoReplyTabPage.Controls.Add(this.simpleAutoReplyPanel);
+            this.simpleAutoReplyTabPage.Text = "Simple Autoreply";
+            this.simpleAutoReplyTabPage.Name = "simpleAutoReplyTabPage";
+            this.simpleAutoReplyTabPage.AccessibleName = "Simple Autoreply tab";
+            //
+            // simpleAutoReplyPanel
+            //
+            this.simpleAutoReplyPanel.AutoScroll = true;
+            this.simpleAutoReplyPanel.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.simpleAutoReplyPanel.Name = "simpleAutoReplyPanel";
             //
             // spotWatchTabPage
             //
@@ -771,6 +789,8 @@ namespace WSJTX_Controller
             this.advUiPanel.ResumeLayout(false);
             this.wantedCallsTabPage.ResumeLayout(false);
             this.wantedCallsPanel.ResumeLayout(false);
+            this.simpleAutoReplyTabPage.ResumeLayout(false);
+            this.simpleAutoReplyPanel.ResumeLayout(false);
             this.spotWatchTabPage.ResumeLayout(false);
             this.spotWatchPanel.ResumeLayout(false);
             this.soundsTabPage.ResumeLayout(false);
@@ -842,6 +862,8 @@ namespace WSJTX_Controller
         private System.Windows.Forms.Panel advUiPanel;
         private System.Windows.Forms.TabPage wantedCallsTabPage;
         private System.Windows.Forms.Panel wantedCallsPanel;
+        private System.Windows.Forms.TabPage simpleAutoReplyTabPage;
+        private System.Windows.Forms.Panel simpleAutoReplyPanel;
         private System.Windows.Forms.TabPage spotWatchTabPage;
         private System.Windows.Forms.Panel spotWatchPanel;
         private System.Windows.Forms.TabPage soundsTabPage;

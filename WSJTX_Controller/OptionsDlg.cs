@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Net;
@@ -30,13 +30,14 @@ namespace WSJTX_Controller
 
         private bool startOnUdpTab;
 
-        private const int HotkeysTabIndex      = 4;
-        private const int AdvUiTabIndex        = 5;
-        private const int WantedCallsTabIndex  = 6;
-        private const int SpotWatchTabIndex    = 7;
-        private const int SoundsTabIndex       = 8;
-        private const int UdpTabIndex          = 9;
-        private const int LookupTabIndex       = 10;
+        // Simple Autoreply occupies index 3, so everything after it shifted by one.
+        private const int HotkeysTabIndex      = 5;
+        private const int AdvUiTabIndex        = 6;
+        private const int WantedCallsTabIndex  = 7;
+        private const int SpotWatchTabIndex    = 8;
+        private const int SoundsTabIndex       = 9;
+        private const int UdpTabIndex          = 10;
+        private const int LookupTabIndex       = 11;
 
         // Advanced UI tab — controls created dynamically in BuildAdvancedUiTab()
         private System.Windows.Forms.CheckBox advCallLayoutCheckBox;
@@ -134,6 +135,22 @@ namespace WSJTX_Controller
         private System.Windows.Forms.CheckBox   _showSpotWatchCheckBox;
         private System.Windows.Forms.ComboBox   _spotWatchSortCb;
 
+        // Simple Autoreply group (Receive / Auto Reply tab) -- built in code rather than
+        // reparented from Controller, following the newer Build*Tab() pattern.
+        // Plain container for the option rows; the tab itself provides the grouping.
+        private System.Windows.Forms.Panel          _arGroupBox;
+        private System.Windows.Forms.CheckBox       _arEnabledCb;
+        private System.Windows.Forms.CheckBox       _arMyCallersCb;
+        private System.Windows.Forms.CheckBox       _arCqCallersCb;
+        private System.Windows.Forms.CheckBox       _arMinSnrCb;
+        private System.Windows.Forms.NumericUpDown  _arMinSnrNud;
+        private System.Windows.Forms.CheckBox       _arNewOnlyCb;
+        private System.Windows.Forms.CheckBox       _arDirCqCb;
+        private System.Windows.Forms.CheckBox       _arNewDxccCb;
+        private System.Windows.Forms.ComboBox       _arNewDxccScopeCb;
+        private System.Windows.Forms.ComboBox       _arListModeCb;
+        private System.Windows.Forms.TextBox        _arListTextBox;
+
         // General tab
         private System.Windows.Forms.CheckBox pskReporterCheckBox;
         private System.Windows.Forms.CheckBox moveFocusToStatusCheckBox;
@@ -212,6 +229,7 @@ namespace WSJTX_Controller
             BuildLogbookSyncTab();
             BuildLookupDataTab();
             BuildAppearanceTab();
+            BuildSimpleAutoReplyTab();
             ReparentControlsToDialog();
 
             UpdateAllButtons();
@@ -350,6 +368,7 @@ namespace WSJTX_Controller
             SaveAdvancedUiTab();
             SaveWantedCallsTab();
             SaveSpotWatchTab();
+            SaveSimpleAutoReplyTab();
             SaveSoundsTab();
             SaveLookupTab();
             SaveAppearanceTab();
@@ -902,6 +921,267 @@ namespace WSJTX_Controller
                 : (ctrl.spotWatchSortKey ?? "callsign").ToLowerInvariant() == "snr" ? 2 : 0;
             _spotWatchSortCb.SelectedIndex = sortIdx;
             spotWatchPanel.Controls.Add(_spotWatchSortCb);
+        }
+
+        // ===== SIMPLE AUTOREPLY TAB =====
+
+        // Its own tab rather than a group appended to Receive / Auto Reply. Sharing that
+        // tab put it at y=505 in a dialog whose client area is 418px tall, so it was
+        // always below the fold and only reachable by scrolling. It also reads better
+        // apart: this mode replaces the filters on that tab rather than adding to them.
+        private void BuildSimpleAutoReplyTab()
+        {
+            var font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F);
+            var ar = ctrl.AutoReply;
+            const int w = 650;
+
+            simpleAutoReplyPanel.Controls.Clear();
+
+            // A plain container, not a GroupBox: the tab already names the feature, and a
+            // group with the same name would just make screen readers say it twice.
+            _arGroupBox = new System.Windows.Forms.Panel
+            {
+                Location       = new System.Drawing.Point(5, 60),
+                Size           = new System.Drawing.Size(w, 205),
+                Font           = font,
+            };
+
+            var arIntro = new System.Windows.Forms.TextBox
+            {
+                ReadOnly       = true,
+                Multiline      = true,
+                BorderStyle    = System.Windows.Forms.BorderStyle.None,
+                BackColor      = simpleAutoReplyPanel.BackColor,
+                ForeColor      = System.Drawing.SystemColors.ControlText,
+                Location       = new System.Drawing.Point(8, 8),
+                Size           = new System.Drawing.Size(w, 48),
+                Text           = "Replaces the Calling, Replying and Call Filter settings with the simple filters below."
+                                 + Environment.NewLine
+                                 + "With nothing else ticked Jimmy replies to every station calling CQ, including ones already worked."
+                                 + Environment.NewLine
+                                 + "Stations answering your own CQ are always worked, whatever the filters say.",
+                TabStop        = false,
+                AccessibleName = "Simple Autoreply description",
+                Font           = font,
+            };
+            simpleAutoReplyPanel.Controls.Add(arIntro);
+
+            _arEnabledCb = new System.Windows.Forms.CheckBox
+            {
+                Text           = "Enable Simple Autoreply",
+                Checked        = ar.Enabled,
+                Location       = new System.Drawing.Point(10, 18),
+                AutoSize       = true,
+                TabIndex       = 0,
+                Font           = font,
+                AccessibleName = "Enable Simple Autoreply",
+                AccessibleDescription = "Replaces the Calling, Replying and Call Filter settings with the simple filters below. With nothing else set, Jimmy replies to every station, including ones already worked on this band.",
+            };
+            _arEnabledCb.CheckedChanged += (s, e) => UpdateSimpleAutoReplyEnabled();
+            _arGroupBox.Controls.Add(_arEnabledCb);
+
+            _arMyCallersCb = new System.Windows.Forms.CheckBox
+            {
+                Text           = "Reply to stations answering my CQ",
+                Checked        = ar.ReplyToMyCallers,
+                Location       = new System.Drawing.Point(10, 42),
+                AutoSize       = true,
+                TabIndex       = 1,
+                Font           = font,
+                AccessibleName = "Reply to stations answering my CQ",
+                AccessibleDescription = "When checked, Jimmy works stations that call us after we call CQ.",
+            };
+            _arGroupBox.Controls.Add(_arMyCallersCb);
+
+            _arCqCallersCb = new System.Windows.Forms.CheckBox
+            {
+                Text           = "Reply to stations calling CQ",
+                Checked        = ar.ReplyToCqCallers,
+                Location       = new System.Drawing.Point(330, 42),
+                AutoSize       = true,
+                TabIndex       = 2,
+                Font           = font,
+                AccessibleName = "Reply to stations calling CQ",
+                AccessibleDescription = "When checked, Jimmy also answers other stations' CQ calls. When unchecked, Jimmy works only stations that called us.",
+            };
+            _arGroupBox.Controls.Add(_arCqCallersCb);
+
+            _arMinSnrCb = new System.Windows.Forms.CheckBox
+            {
+                Text           = "Ignore signals weaker than",
+                Checked        = ar.MinSnrEnabled,
+                Location       = new System.Drawing.Point(10, 68),
+                AutoSize       = true,
+                TabIndex       = 3,
+                Font           = font,
+                AccessibleName = "Ignore weak signals",
+                AccessibleDescription = "When unchecked, signal strength is not filtered at all.",
+            };
+            _arGroupBox.Controls.Add(_arMinSnrCb);
+
+            _arMinSnrNud = new System.Windows.Forms.NumericUpDown
+            {
+                Minimum        = -30,
+                Maximum        = 30,
+                Value          = ar.MinSnr,
+                Location       = new System.Drawing.Point(180, 66),
+                Size           = new System.Drawing.Size(50, 20),
+                TabIndex       = 4,
+                Font           = font,
+                AccessibleName = "Minimum signal report in dB",
+            };
+            _arGroupBox.Controls.Add(_arMinSnrNud);
+
+            _arGroupBox.Controls.Add(new System.Windows.Forms.Label
+            {
+                Text           = "dB",
+                Location       = new System.Drawing.Point(236, 69),
+                AutoSize       = true,
+                Font           = font,
+                TabStop        = false,
+                AccessibleName = "dB",
+            });
+
+            _arNewOnlyCb = new System.Windows.Forms.CheckBox
+            {
+                Text           = "Only stations not yet worked on this band",
+                Checked        = ar.NewCallsOnly,
+                Location       = new System.Drawing.Point(10, 92),
+                AutoSize       = true,
+                TabIndex       = 5,
+                Font           = font,
+                AccessibleName = "Only stations not yet worked on this band",
+                AccessibleDescription = "When unchecked, Jimmy will work the same station again on this band.",
+            };
+            _arGroupBox.Controls.Add(_arNewOnlyCb);
+
+            _arDirCqCb = new System.Windows.Forms.CheckBox
+            {
+                Text           = "Skip directed CQs not meant for me",
+                Checked        = ar.ExcludeUnmatchedDirectedCq,
+                Location       = new System.Drawing.Point(330, 92),
+                AutoSize       = true,
+                TabIndex       = 6,
+                Font           = font,
+                AccessibleName = "Skip directed CQs not meant for me",
+                AccessibleDescription = "Leave checked to avoid answering calls such as CQ JA when we are not in that area.",
+            };
+            _arGroupBox.Controls.Add(_arDirCqCb);
+
+            _arNewDxccCb = new System.Windows.Forms.CheckBox
+            {
+                Text           = "Only DXCC entities I still need",
+                Checked        = ar.NewDxccOnly,
+                Location       = new System.Drawing.Point(10, 118),
+                AutoSize       = true,
+                TabIndex       = 7,
+                Font           = font,
+                AccessibleName = "Only DXCC entities I still need",
+                AccessibleDescription = "Jimmy only calls stations whose DXCC entity is still missing from the log. Stations that answer your own CQ are always worked, whatever their entity.",
+            };
+            _arNewDxccCb.CheckedChanged += (s, e) => UpdateSimpleAutoReplyEnabled();
+            _arGroupBox.Controls.Add(_arNewDxccCb);
+
+            _arNewDxccScopeCb = new System.Windows.Forms.ComboBox
+            {
+                DropDownStyle  = System.Windows.Forms.ComboBoxStyle.DropDownList,
+                Location       = new System.Drawing.Point(250, 115),
+                TabIndex       = 8,
+                Font           = font,
+                Size           = new System.Drawing.Size(190, 21),
+                AccessibleName = "DXCC scope",
+                AccessibleDescription = "Any band means the entity has never been worked. This band means it has not been worked on the band in use. Not confirmed means it still has no LoTW or QRZ confirmation, whether or not it has been worked.",
+            };
+            _arNewDxccScopeCb.Items.AddRange(new object[] { "New on any band", "New on this band", "Not confirmed yet" });
+            _arNewDxccScopeCb.SelectedIndex =
+                ar.NewDxccScope == AutoReplyFilter.DxccScopes.CURRENT_BAND ? 1
+                : ar.NewDxccScope == AutoReplyFilter.DxccScopes.NEW_OR_UNCONFIRMED ? 2 : 0;
+            _arGroupBox.Controls.Add(_arNewDxccScopeCb);
+
+            _arGroupBox.Controls.Add(new System.Windows.Forms.Label
+            {
+                Text           = "Stations:",
+                Location       = new System.Drawing.Point(10, 148),
+                AutoSize       = true,
+                Font           = font,
+                TabStop        = false,
+                AccessibleName = "Stations list mode label",
+            });
+
+            _arListModeCb = new System.Windows.Forms.ComboBox
+            {
+                DropDownStyle  = System.Windows.Forms.ComboBoxStyle.DropDownList,
+                Location       = new System.Drawing.Point(70, 145),
+                Size           = new System.Drawing.Size(110, 21),
+                TabIndex       = 9,
+                Font           = font,
+                AccessibleName = "Stations list mode",
+                AccessibleDescription = "Choose whether the list below is the only set of stations to reply to, or a set to skip.",
+            };
+            _arListModeCb.Items.AddRange(new object[] { "Only these", "Except these" });
+            _arListModeCb.SelectedIndex = ar.ListMode == AutoReplyFilter.ListModes.EXCLUDE ? 1 : 0;
+            _arGroupBox.Controls.Add(_arListModeCb);
+
+            _arListTextBox = new System.Windows.Forms.TextBox
+            {
+                Text           = ar.ListAsText(),
+                Location       = new System.Drawing.Point(190, 145),
+                Size           = new System.Drawing.Size(440, 20),
+                TabIndex       = 10,
+                Font           = font,
+                AccessibleName = "Stations list",
+                AccessibleDescription = "Continents, countries or callsign prefixes, separated by commas. For example: EU, Spain, EA. Leave empty to apply no station filter.",
+            };
+            _arGroupBox.Controls.Add(_arListTextBox);
+
+            _arGroupBox.Controls.Add(new System.Windows.Forms.Label
+            {
+                Text           = "Continent (EU), country (Spain) or callsign prefix (EA), comma separated. Empty = no station filter.",
+                Location       = new System.Drawing.Point(10, 175),
+                AutoSize       = true,
+                Font           = font,
+                TabStop        = false,
+                AccessibleName = "Stations list format",
+            });
+
+            simpleAutoReplyPanel.Controls.Add(_arGroupBox);
+            UpdateSimpleAutoReplyEnabled();
+        }
+
+        // Greys out the sub-options when the mode is off. The master checkbox itself
+        // always stays reachable, so the group is never a keyboard dead end.
+        private void UpdateSimpleAutoReplyEnabled()
+        {
+            if (_arEnabledCb == null) return;
+            bool on = _arEnabledCb.Checked;
+            foreach (System.Windows.Forms.Control c in _arGroupBox.Controls)
+                if (c != _arEnabledCb) c.Enabled = on;
+            // The scope choice only means anything once the DXCC filter itself is on.
+            if (_arNewDxccScopeCb != null)
+                _arNewDxccScopeCb.Enabled = on && _arNewDxccCb != null && _arNewDxccCb.Checked;
+        }
+
+        private void SaveSimpleAutoReplyTab()
+        {
+            if (_arEnabledCb == null) return;
+            var ar = ctrl.AutoReply;
+            ar.Enabled = _arEnabledCb.Checked;
+            ar.ReplyToMyCallers = _arMyCallersCb.Checked;
+            ar.ReplyToCqCallers = _arCqCallersCb.Checked;
+            ar.MinSnrEnabled = _arMinSnrCb.Checked;
+            ar.MinSnr = (int)_arMinSnrNud.Value;
+            ar.NewCallsOnly = _arNewOnlyCb.Checked;
+            ar.ExcludeUnmatchedDirectedCq = _arDirCqCb.Checked;
+            ar.NewDxccOnly = _arNewDxccCb.Checked;
+            ar.NewDxccScope = _arNewDxccScopeCb.SelectedIndex == 1
+                              ? AutoReplyFilter.DxccScopes.CURRENT_BAND
+                              : _arNewDxccScopeCb.SelectedIndex == 2
+                                ? AutoReplyFilter.DxccScopes.NEW_OR_UNCONFIRMED
+                                : AutoReplyFilter.DxccScopes.ANY_BAND;
+            ar.ListMode = _arListModeCb.SelectedIndex == 1
+                          ? AutoReplyFilter.ListModes.EXCLUDE
+                          : AutoReplyFilter.ListModes.ALLOW;
+            ar.SetListFromText(_arListTextBox.Text);
         }
 
         private void SaveSpotWatchTab()

@@ -1,5 +1,8 @@
+using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
+using System.Reflection;
 
 namespace WSJTX_Controller
 {
@@ -17,6 +20,27 @@ namespace WSJTX_Controller
     // rather than silently changed as part of a refactor.
     public class JimmySettings
     {
+        // JIMMY_TEST_INI_PATH lets the replay test suite point a real, separately-running
+        // Jimmy.exe at a throwaway settings file instead of the operator's actual one --
+        // unset in normal operation, so behavior is unchanged. Mirrors LogbookDb.DbPath /
+        // JIMMY_TEST_DB_PATH, which does exactly this for the logbook database.
+        //
+        // Single source of truth for the settings file location: Controller.Form_Load and
+        // SupportReportBuilder.GetIniPath() both resolve through here, so a test run can
+        // never end up with one of them reading the real INI and the other the test one.
+        public static string IniPath
+        {
+            get
+            {
+                string testPath = Environment.GetEnvironmentVariable("JIMMY_TEST_INI_PATH");
+                if (!string.IsNullOrWhiteSpace(testPath)) return testPath;
+                string name = Assembly.GetExecutingAssembly().GetName().Name;
+                return Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    name, name + ".ini");
+            }
+        }
+
         public bool AdvancedCallLayout { get; set; } = true;
         public bool AdvShowTx1 { get; set; } = true;
         public bool AdvShowTx2 { get; set; } = true;

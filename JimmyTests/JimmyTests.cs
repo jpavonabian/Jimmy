@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -122,6 +122,12 @@ static class JimmyTests
         CallQueueRankerBeamRankTests();
         JimmySettingsRoundTripTests();
         JimmySettingsDefaultsTests();
+        AutoReplyFilterDefaultsTests();
+        AutoReplyFilterGateTests();
+        AutoReplyFilterListTests();
+        AutoReplyFilterAvailabilityTests();
+        AutoReplyFilterNewDxccTests();
+        AutoReplyFilterIniTests();
         FindPreservedSelectionIndexTests();
         ResolveDispatchIndexTests();
         SpotWatchCallsRoundTripTests();
@@ -2188,6 +2194,339 @@ static class JimmyTests
         finally
         {
             try { File.Delete(tmpIni); } catch { }
+        }
+    }
+
+    // ── AutoReplyFilter: Simple Autoreply admission logic ──
+    // The whole point of this mode is that switching it on with nothing else
+    // configured admits everything the normal pipeline would reject (already-worked
+    // stations, weak signals, any continent). These tests pin that down, then check
+    // each filter in isolation.
+    static EnqueueDecodeMessage MakeAutoReplyDecode(string call, int snr = -10,
+        string continent = "EU", string country = "Spain", bool isNewCallOnBand = true,
+        bool isNewCountry = true, bool isNewCountryOnBand = true)
+    {
+        return new EnqueueDecodeMessage
+        {
+            Message = $"CQ {call} IN80",
+            Snr = snr,
+            Continent = continent,
+            Country = country,
+            IsNewCallOnBand = isNewCallOnBand,
+            // WSJT-X supplies both of these in the decode; the filter never derives them.
+            IsNewCountry = isNewCountry,
+            IsNewCountryOnBand = isNewCountryOnBand,
+        };
+    }
+
+    static void AutoReplyFilterDefaultsTests()
+    {
+        Console.WriteLine("\n── AutoReplyFilter: Defaults (off = master behaviour, on = reply to everyone) ──");
+        var f = new AutoReplyFilter();
+
+        Check("Mode is off by default", f.Enabled, false);
+        Check("ReplyToMyCallers defaults true", f.ReplyToMyCallers, true);
+        Check("ReplyToCqCallers defaults false", f.ReplyToCqCallers, false);
+        Check("MinSnrEnabled defaults false", f.MinSnrEnabled, false);
+        Check("NewCallsOnly defaults false", f.NewCallsOnly, false);
+        Check("ExcludeUnmatchedDirectedCq defaults true", f.ExcludeUnmatchedDirectedCq, true);
+        Check("Station list starts empty", f.ListTokens.Count == 0, true);
+
+        string reason;
+        // Unconfigured mode must admit exactly the cases the normal pipeline drops.
+        Check("Unconfigured: admits an ordinary CQ",
+              f.Accepts(MakeAutoReplyDecode("EA1ABC"), "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+        Check("Unconfigured: admits a station already worked on band",
+              f.Accepts(MakeAutoReplyDecode("EA1ABC", isNewCallOnBand: false), "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+        Check("Unconfigured: admits a very weak signal",
+              f.Accepts(MakeAutoReplyDecode("EA1ABC", snr: -24), "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+        Check("Unconfigured: admits any continent",
+              f.Accepts(MakeAutoReplyDecode("JA1ABC", continent: "AS", country: "Japan"), "JA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+        Check("Unconfigured: admits an unknown-country decode",
+              f.Accepts(MakeAutoReplyDecode("EA1ABC", continent: "", country: ""), "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+    }
+
+    static void AutoReplyFilterGateTests()
+    {
+        Console.WriteLine("\n── AutoReplyFilter: Individual Filters ──");
+        string reason;
+
+        // Directed CQ: on by default because answering "CQ JA" from Europe is bad
+        // operating practice, not a preference.
+        var dirCq = new AutoReplyFilter();
+        Check("Directed CQ not for us is rejected by default",
+              dirCq.Accepts(MakeAutoReplyDecode("JA1ABC"), "JA1ABC", false, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), false);
+        CheckStr("Directed CQ rejection reason", reason, "directed CQ not for us");
+        dirCq.ExcludeUnmatchedDirectedCq = false;
+        Check("Directed CQ admitted once the guard is switched off",
+              dirCq.Accepts(MakeAutoReplyDecode("JA1ABC"), "JA1ABC", false, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+
+        // SNR floor.
+        var snrFilter = new AutoReplyFilter { MinSnrEnabled = true, MinSnr = -15 };
+        Check("SNR below floor rejected",
+              snrFilter.Accepts(MakeAutoReplyDecode("EA1ABC", snr: -16), "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), false);
+        Check("SNR exactly at floor admitted",
+              snrFilter.Accepts(MakeAutoReplyDecode("EA1ABC", snr: -15), "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+        Check("SNR above floor admitted",
+              snrFilter.Accepts(MakeAutoReplyDecode("EA1ABC", snr: 0), "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+        snrFilter.MinSnrEnabled = false;
+        Check("Disabled SNR floor admits the same weak decode",
+              snrFilter.Accepts(MakeAutoReplyDecode("EA1ABC", snr: -16), "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+
+        // New-calls-only.
+        var newOnly = new AutoReplyFilter { NewCallsOnly = true };
+        Check("NewCallsOnly rejects a station worked on this band",
+              newOnly.Accepts(MakeAutoReplyDecode("EA1ABC", isNewCallOnBand: false), "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), false);
+        CheckStr("NewCallsOnly rejection reason", reason, "already worked on band");
+        Check("NewCallsOnly admits a new station",
+              newOnly.Accepts(MakeAutoReplyDecode("EA1ABC", isNewCallOnBand: true), "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+    }
+
+    static void AutoReplyFilterListTests()
+    {
+        Console.WriteLine("\n── AutoReplyFilter: Station List (allow / exclude) ──");
+        string reason;
+
+        var allow = new AutoReplyFilter { ListMode = AutoReplyFilter.ListModes.ALLOW };
+        allow.SetListFromText("EU, Japan, VK");
+
+        Check("Allow list matches by continent code",
+              allow.Accepts(MakeAutoReplyDecode("EA1ABC", continent: "EU", country: "Spain"), "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+        Check("Allow list matches by country name",
+              allow.Accepts(MakeAutoReplyDecode("JA1ABC", continent: "AS", country: "Japan"), "JA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+        Check("Allow list matches by callsign prefix",
+              allow.Accepts(MakeAutoReplyDecode("VK3ABC", continent: "OC", country: "Australia"), "VK3ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+        Check("Allow list rejects a station matching nothing",
+              allow.Accepts(MakeAutoReplyDecode("W1ABC", continent: "NA", country: "USA"), "W1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), false);
+        CheckStr("Allow list rejection reason", reason, "not in allow list");
+        Check("Allow list matching is case-insensitive",
+              allow.Accepts(MakeAutoReplyDecode("vk3abc", continent: "OC", country: "Australia"), "vk3abc", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+
+        var exclude = new AutoReplyFilter { ListMode = AutoReplyFilter.ListModes.EXCLUDE };
+        exclude.SetListFromText("NA");
+        Check("Exclude list rejects a listed continent",
+              exclude.Accepts(MakeAutoReplyDecode("W1ABC", continent: "NA", country: "USA"), "W1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), false);
+        CheckStr("Exclude list rejection reason", reason, "in exclude list");
+        Check("Exclude list admits an unlisted station",
+              exclude.Accepts(MakeAutoReplyDecode("EA1ABC"), "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+
+        // An empty list must never filter anything, in either mode -- otherwise ALLOW
+        // with a blank text box would silently block every station.
+        var emptyAllow = new AutoReplyFilter { ListMode = AutoReplyFilter.ListModes.ALLOW };
+        Check("Empty ALLOW list admits everything",
+              emptyAllow.Accepts(MakeAutoReplyDecode("W1ABC", continent: "NA", country: "USA"), "W1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+        var emptyExclude = new AutoReplyFilter { ListMode = AutoReplyFilter.ListModes.EXCLUDE };
+        Check("Empty EXCLUDE list admits everything",
+              emptyExclude.Accepts(MakeAutoReplyDecode("W1ABC", continent: "NA", country: "USA"), "W1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+
+        // Parsing.
+        var parse = new AutoReplyFilter();
+        parse.SetListFromText("EA, EB;  EC\nED\tEE");
+        Check("SetListFromText splits on commas, semicolons and whitespace",
+              parse.ListTokens.Count == 5, true);
+        parse.SetListFromText("EA, ea, Ea");
+        Check("SetListFromText de-duplicates case-insensitively",
+              parse.ListTokens.Count == 1, true);
+        parse.SetListFromText("   ");
+        Check("Whitespace-only text yields an empty list", parse.ListTokens.Count == 0, true);
+        parse.SetListFromText(null);
+        Check("Null text yields an empty list", parse.ListTokens.Count == 0, true);
+    }
+
+    static void AutoReplyFilterNewDxccTests()
+    {
+        Console.WriteLine("\n── AutoReplyFilter: Only new DXCC entities ──");
+        string reason;
+
+        // Off by default -- an entity already in the log is still worked.
+        var off = new AutoReplyFilter();
+        Check("NewDxccOnly defaults off", off.NewDxccOnly, false);
+        Check("Default scope is any band",
+              off.NewDxccScope == AutoReplyFilter.DxccScopes.ANY_BAND, true);
+        Check("Filter off: worked entity still admitted",
+              off.Accepts(MakeAutoReplyDecode("EA1ABC", isNewCountry: false, isNewCountryOnBand: false),
+                          "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+
+        // ANY_BAND: the entity must be missing from the log entirely.
+        var anyBand = new AutoReplyFilter { NewDxccOnly = true };
+        Check("Any band: never-worked entity admitted",
+              anyBand.Accepts(MakeAutoReplyDecode("EA1ABC", isNewCountry: true),
+                              "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+        Check("Any band: worked entity rejected",
+              anyBand.Accepts(MakeAutoReplyDecode("EA1ABC", isNewCountry: false, isNewCountryOnBand: false),
+                              "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), false);
+        CheckStr("Any band rejection reason", reason, "DXCC already worked");
+        // Worked elsewhere but not on this band is still "already worked" for ANY_BAND.
+        Check("Any band: entity worked on another band is rejected",
+              anyBand.Accepts(MakeAutoReplyDecode("EA1ABC", isNewCountry: false, isNewCountryOnBand: true),
+                              "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), false);
+
+        // CURRENT_BAND: the looser of the two -- a band slot still counts.
+        var thisBand = new AutoReplyFilter
+        {
+            NewDxccOnly = true,
+            NewDxccScope = AutoReplyFilter.DxccScopes.CURRENT_BAND,
+        };
+        Check("This band: entity worked elsewhere but new here is admitted",
+              thisBand.Accepts(MakeAutoReplyDecode("EA1ABC", isNewCountry: false, isNewCountryOnBand: true),
+                               "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+        Check("This band: entity already worked on this band is rejected",
+              thisBand.Accepts(MakeAutoReplyDecode("EA1ABC", isNewCountry: false, isNewCountryOnBand: false),
+                               "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), false);
+        CheckStr("This band rejection reason", reason, "DXCC already worked on this band");
+
+        // The TO_MYCALL path passes applyNewDxccFilter:false -- a station already calling
+        // us must never be turned away over its entity.
+        Check("Station answering our CQ is admitted despite a worked entity",
+              anyBand.Accepts(MakeAutoReplyDecode("EA1ABC", isNewCountry: false, isNewCountryOnBand: false),
+                              "EA1ABC", true, applyNewDxccFilter: false, isDxccUnconfirmed: false, out reason), true);
+
+        // The DXCC filter composes with the others rather than overriding them.
+        var both = new AutoReplyFilter { NewDxccOnly = true, MinSnrEnabled = true, MinSnr = -15 };
+        Check("New entity below the SNR floor is still rejected",
+              both.Accepts(MakeAutoReplyDecode("EA1ABC", snr: -20, isNewCountry: true),
+                           "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), false);
+
+        // NEW_OR_UNCONFIRMED: about the award, not the log. An entity counts while it
+        // still lacks a LoTW/QRZ confirmation -- never worked, or worked and unconfirmed.
+        var unconf = new AutoReplyFilter
+        {
+            NewDxccOnly = true,
+            NewDxccScope = AutoReplyFilter.DxccScopes.NEW_OR_UNCONFIRMED,
+        };
+        Check("Not confirmed: never-worked entity admitted",
+              unconf.Accepts(MakeAutoReplyDecode("3B8DX", isNewCountry: true),
+                             "3B8DX", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), true);
+        // The CS8ABF case from the operator's queue: Azores worked, never confirmed.
+        Check("Not confirmed: worked-but-unconfirmed entity admitted",
+              unconf.Accepts(MakeAutoReplyDecode("CS8ABF", isNewCountry: false, isNewCountryOnBand: false),
+                             "CS8ABF", true, applyNewDxccFilter: true, isDxccUnconfirmed: true, out reason), true);
+        Check("Not confirmed: worked AND confirmed entity rejected",
+              unconf.Accepts(MakeAutoReplyDecode("EA1ABC", isNewCountry: false, isNewCountryOnBand: false),
+                             "EA1ABC", true, applyNewDxccFilter: true, isDxccUnconfirmed: false, out reason), false);
+        CheckStr("Not confirmed rejection reason", reason, "DXCC already confirmed");
+
+        // The other two scopes must ignore the unconfirmed flag entirely.
+        Check("Any band scope ignores the unconfirmed flag",
+              anyBand.Accepts(MakeAutoReplyDecode("CS8ABF", isNewCountry: false, isNewCountryOnBand: false),
+                              "CS8ABF", true, applyNewDxccFilter: true, isDxccUnconfirmed: true, out reason), false);
+        Check("This band scope ignores the unconfirmed flag",
+              thisBand.Accepts(MakeAutoReplyDecode("CS8ABF", isNewCountry: false, isNewCountryOnBand: false),
+                               "CS8ABF", true, applyNewDxccFilter: true, isDxccUnconfirmed: true, out reason), false);
+
+        // NeedsUnconfirmedDxccFlag gates a callsign lookup in the caller, so it must be
+        // true only for the scope that actually needs the answer.
+        Check("NeedsUnconfirmedDxccFlag true only for the not-confirmed scope",
+              unconf.NeedsUnconfirmedDxccFlag, true);
+        Check("NeedsUnconfirmedDxccFlag false for any-band scope",
+              anyBand.NeedsUnconfirmedDxccFlag, false);
+        Check("NeedsUnconfirmedDxccFlag false when the filter is off",
+              new AutoReplyFilter { NewDxccScope = AutoReplyFilter.DxccScopes.NEW_OR_UNCONFIRMED }
+                  .NeedsUnconfirmedDxccFlag, false);
+    }
+
+    static void AutoReplyFilterAvailabilityTests()
+    {
+        Console.WriteLine("\n── AutoReplyFilter: ShowsStationAvailable (callable vs busy) ──");
+
+        Func<string, EnqueueDecodeMessage> msg =
+            m => new EnqueueDecodeMessage { Message = m };
+
+        // Callable: the station is either calling now, or has just finished.
+        Check("Plain CQ is callable",
+              AutoReplyFilter.ShowsStationAvailable(msg("CQ EA1ABC IN80")), true);
+        Check("CQ without a grid is callable",
+              AutoReplyFilter.ShowsStationAvailable(msg("CQ EA1ABC")), true);
+        Check("Directed CQ is callable (the directed-CQ filter decides separately)",
+              AutoReplyFilter.ShowsStationAvailable(msg("CQ DX EA1ABC IN80")), true);
+        Check("73 between two other stations is callable (station now free)",
+              AutoReplyFilter.ShowsStationAvailable(msg("BG8HNC LY3BFH 73")), true);
+        Check("RR73 between two other stations is callable (station now free)",
+              AutoReplyFilter.ShowsStationAvailable(msg("BG8HNC LY3BFH RR73")), true);
+
+        // Busy: this decode is itself proof the station is working someone else.
+        // These are the exact shapes that filled the queue on 2026-09-05.
+        Check("Signal report between two other stations is NOT callable",
+              AutoReplyFilter.ShowsStationAvailable(msg("BG8HNC LY3BFH -16")), false);
+        Check("Roger-report between two other stations is NOT callable",
+              AutoReplyFilter.ShowsStationAvailable(msg("JH6URJ US8KA R-17")), false);
+        Check("Grid reply between two other stations is NOT callable",
+              AutoReplyFilter.ShowsStationAvailable(msg("VK6OP DL6PX JO40")), false);
+        // RRR only means "all received", not a sign-off -- a station can repeat it while
+        // still working the other party, so it must not count as free.
+        Check("Bare RRR is NOT callable (not a sign-off)",
+              AutoReplyFilter.ShowsStationAvailable(msg("BG8HNC LY3BFH RRR")), false);
+        Check("Null decode is not callable",
+              AutoReplyFilter.ShowsStationAvailable(null), false);
+    }
+
+    static void AutoReplyFilterIniTests()
+    {
+        Console.WriteLine("\n── AutoReplyFilter: INI Round-trip and Missing-key Defaults ──");
+        string tmpIni = Path.Combine(Path.GetTempPath(), "JimmyTest_AutoReply_" + Guid.NewGuid().ToString("N") + ".ini");
+        try
+        {
+            var saved = new AutoReplyFilter
+            {
+                Enabled = true,
+                ReplyToMyCallers = false,
+                ReplyToCqCallers = true,
+                MinSnrEnabled = true,
+                MinSnr = -12,
+                NewCallsOnly = true,
+                NewDxccOnly = true,
+                // The third enum value is the one a naive string round-trip is most
+                // likely to drop, so that is the one this saves and reloads.
+                NewDxccScope = AutoReplyFilter.DxccScopes.NEW_OR_UNCONFIRMED,
+                ExcludeUnmatchedDirectedCq = false,
+                ListMode = AutoReplyFilter.ListModes.EXCLUDE,
+            };
+            saved.SetListFromText("EU, JA1ABC");
+            var ini = new IniFile(tmpIni);
+            saved.SaveToIni(ini);
+
+            var loaded = new AutoReplyFilter();
+            loaded.LoadFromIni(ini);
+
+            Check("Round-trip: Enabled", loaded.Enabled, saved.Enabled);
+            Check("Round-trip: ReplyToMyCallers", loaded.ReplyToMyCallers, saved.ReplyToMyCallers);
+            Check("Round-trip: ReplyToCqCallers", loaded.ReplyToCqCallers, saved.ReplyToCqCallers);
+            Check("Round-trip: MinSnrEnabled", loaded.MinSnrEnabled, saved.MinSnrEnabled);
+            Check("Round-trip: MinSnr", loaded.MinSnr == saved.MinSnr, true);
+            Check("Round-trip: NewCallsOnly", loaded.NewCallsOnly, saved.NewCallsOnly);
+            Check("Round-trip: NewDxccOnly", loaded.NewDxccOnly, saved.NewDxccOnly);
+            Check("Round-trip: NewDxccScope", loaded.NewDxccScope == saved.NewDxccScope, true);
+            Check("Round-trip: ExcludeUnmatchedDirectedCq", loaded.ExcludeUnmatchedDirectedCq, saved.ExcludeUnmatchedDirectedCq);
+            Check("Round-trip: ListMode", loaded.ListMode == saved.ListMode, true);
+            CheckStr("Round-trip: station list", loaded.ListAsText(), saved.ListAsText());
+        }
+        finally
+        {
+            try { File.Delete(tmpIni); } catch { }
+        }
+
+        // An INI written by an older Jimmy has none of these keys: the mode must load
+        // off, so upgrading changes nothing for an existing user.
+        string freshIni = Path.Combine(Path.GetTempPath(), "JimmyTest_AutoReplyFresh_" + Guid.NewGuid().ToString("N") + ".ini");
+        try
+        {
+            var f = new AutoReplyFilter();
+            f.LoadFromIni(new IniFile(freshIni));
+            Check("Missing keys -> mode off", f.Enabled, false);
+            Check("Missing keys -> ReplyToMyCallers true", f.ReplyToMyCallers, true);
+            Check("Missing keys -> ReplyToCqCallers false", f.ReplyToCqCallers, false);
+            Check("Missing keys -> MinSnrEnabled false", f.MinSnrEnabled, false);
+            Check("Missing keys -> NewCallsOnly false", f.NewCallsOnly, false);
+            Check("Missing keys -> NewDxccOnly false", f.NewDxccOnly, false);
+            Check("Missing keys -> NewDxccScope any band",
+                  f.NewDxccScope == AutoReplyFilter.DxccScopes.ANY_BAND, true);
+            Check("Missing keys -> ExcludeUnmatchedDirectedCq true", f.ExcludeUnmatchedDirectedCq, true);
+            Check("Missing keys -> ALLOW list mode", f.ListMode == AutoReplyFilter.ListModes.ALLOW, true);
+            Check("Missing keys -> empty station list", f.ListTokens.Count == 0, true);
+        }
+        finally
+        {
+            try { File.Delete(freshIni); } catch { }
         }
     }
 

@@ -33,6 +33,10 @@ namespace WSJTX_Controller
         // properties, kept under the original field names so the ~65 existing call
         // sites across Controller/WsjtxClient/OptionsDlg/SupportReportBuilder are unaffected.
         public JimmySettings Settings = new JimmySettings();
+        // Simple Autoreply mode (AutoReplyFilter.cs). Kept separate from Settings: it is
+        // an alternative admission path, not a display flag, and it must stay unit-testable
+        // without a live Form. Off by default -- when off nothing consults it.
+        public AutoReplyFilter AutoReply = new AutoReplyFilter();
         public bool advancedCallLayout { get => Settings.AdvancedCallLayout; set => Settings.AdvancedCallLayout = value; }
         public bool advShowTx1 { get => Settings.AdvShowTx1; set => Settings.AdvShowTx1 = value; }
         public bool advShowTx2 { get => Settings.AdvShowTx2; set => Settings.AdvShowTx2 = value; }
@@ -307,8 +311,11 @@ namespace WSJTX_Controller
         {
             //use .ini file for settings (avoid .Net config file mess)
             string pgmName = Assembly.GetExecutingAssembly().GetName().Name.ToString();
-            string path = $"{Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)}\\{pgmName}";
-            string pathFileNameExt = path + "\\" + pgmName + ".ini";
+            //JimmySettings.IniPath honors JIMMY_TEST_INI_PATH so the replay suite can run
+            //against an isolated settings file; unset in normal use, so this resolves to
+            //the usual %LOCALAPPDATA%\Jimmy\Jimmy.ini
+            string pathFileNameExt = JimmySettings.IniPath;
+            string path = Path.GetDirectoryName(pathFileNameExt);
             List<string> parsedCallWaitingRowOrder = null;
             List<string> parsedRawDecodeRowOrder = null;
             hotkeyConfig = new HotkeyConfig();
@@ -519,6 +526,7 @@ namespace WSJTX_Controller
                 usePskReporter = iniFile.Read("usePskReporter") != "False";              //default: true
                 showUsStateCheckBox.Checked = iniFile.Read("showUsState") == "True";
                 Settings.LoadFromIni(iniFile);
+                AutoReply.LoadFromIni(iniFile);
                 rawShowCq = iniFile.Read("rawShowCq") != "False";
                 rawShowDirected = iniFile.Read("rawShowDirected") != "False";
                 rawShowReports = iniFile.Read("rawShowReports") != "False";
@@ -1010,6 +1018,7 @@ namespace WSJTX_Controller
                 iniFile.Write("usePskReporter", wsjtxClient.usePskReporter.ToString());
                 iniFile.Write("showUsState", showUsStateCheckBox.Checked.ToString());
                 Settings.SaveToIni(iniFile);
+                AutoReply.SaveToIni(iniFile);
                 iniFile.Write("rawShowCq", rawShowCq.ToString());
                 iniFile.Write("rawShowDirected", rawShowDirected.ToString());
                 iniFile.Write("rawShowReports", rawShowReports.ToString());
