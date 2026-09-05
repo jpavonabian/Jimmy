@@ -26,6 +26,18 @@ if errorlevel 1 (
     exit /b 1
 )
 
+rem -- Settings are pinned too, not just the database. Left on the operator's own
+rem    Jimmy.ini, this suite measured whoever happened to run it: Optimize
+rem    throughput alone changes maxTxRepeat, which resizes the call queue, which
+rem    moves the queue-capacity assertions. The real INI is only READ as a base;
+rem    every write goes to the copy. See JimmyReplaySeed.py for the pinned keys.
+set "JIMMY_TEST_INI_PATH=%TEMP%\JimmyReplayTest_Jimmy.ini"
+python "%~dp0JimmyReplaySeed.py" "%JIMMY_TEST_INI_PATH%"
+if errorlevel 1 (
+    echo ERROR: could not build the pinned settings file.
+    exit /b 1
+)
+
 set "JIMMY_EXE=%~dp0WSJTX_Controller\bin\Debug\Jimmy.exe"
 set "STARTED_BY_SCRIPT="
 set "JIMMY_PID="

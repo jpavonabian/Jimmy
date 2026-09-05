@@ -28,7 +28,6 @@ USAGE:
 import ctypes
 import datetime
 import os
-import shutil
 import socket
 import struct
 import subprocess
@@ -36,32 +35,10 @@ import sys
 import time
 
 import JimmyReplay as JR
+import JimmyReplaySeed as JRS
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 JIMMY_EXE = os.path.join(SCRIPT_DIR, "WSJTX_Controller", "bin", "Debug", "Jimmy.exe")
-
-# Section name used by IniFile (defaults to the assembly name).
-INI_SECTION = "Jimmy"
-
-# Overridden in every scenario so the assertions never depend on how the
-# operator happens to have the Receive tab configured.
-BASE_OVERRIDES = {
-    "ignoreWeakSnr": "True",     # normal-mode floor ON ...
-    "minSnr": "-20",             # ... at -20, so a -25 decode is master-rejected
-    "removeOnWeakSnr": "False",
-    "advCallLayout": "True",     # accept decodes in either T/R period
-    # Auto-frequency off. With it on, AnalysisNeeded is true and Alt+C puts up a
-    # modal "Transmit slot has not been analyzed" dialog instead of switching
-    # mode, which silently stalls the Call CQ scenario.
-    "bestOffset": "False",
-    # Every Call Filter enabled. Only the mode-off scenarios go through this
-    # switch at all, but without pinning it their outcome depends on which
-    # categories the operator happens to have ticked -- a US station tagged
-    # WAS_NEEDED was silently rejected before this was pinned.
-    "callingPriorities": ("TO_MYCALL,NEW_COUNTRY_ON_BAND,NEW_COUNTRY,WANTED_CQ,ALWAYS_WANTED,"
-                          "DEFAULT,WAS_NEEDED,WAS_UNCONFIRMED,DXCC_UNCONFIRMED,ZONE_NEEDED,"
-                          "STILL_NEEDED"),
-}
 
 # Simple Autoreply defaults, per scenario overrides applied on top.
 AR_DEFAULTS = {
@@ -78,61 +55,24 @@ AR_DEFAULTS = {
     "autoReplySimpleList": "",
 }
 
-
-def real_ini_path():
-    return os.path.join(os.environ["LOCALAPPDATA"], "Jimmy", "Jimmy.ini")
+# Pinned on top of the main-suite pins, for the values these scenarios assume.
+BASE_OVERRIDES = {
+    "ignoreWeakSnr": "True",     # normal-mode floor ON ...
+    "minSnr": "-20",             # ... at -20, so a -25 decode is master-rejected
+    "removeOnWeakSnr": "False",
+    "cqOnly": "True",            # mode-off scenarios exercise the normal msg-type gate
+    "anyMsg": "False",
+}
 
 
 def seed_ini(scenario, overrides):
-    """Copy the operator's INI (read-only) and apply overrides to the copy."""
-    dest = os.path.join(os.environ["TEMP"], f"JimmyAutoReplyTest_{scenario}.ini")
-    src = real_ini_path()
-    if os.path.exists(src):
-        shutil.copyfile(src, dest)
-    elif os.path.exists(dest):
-        os.remove(dest)
-
-    merged = dict(BASE_OVERRIDES)
+    """Throwaway INI for one scenario, layered on the shared pins."""
+    dest = os.path.join(os.environ["TEMP"], "JimmyAutoReplyTest_{0}.ini".format(scenario))
+    merged = dict(JRS.MAIN_SUITE_PINS)
     merged.update(AR_DEFAULTS)
-    merged.update(overrides)
-
-    lines = []
-    if os.path.exists(dest):
-        with open(dest, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.read().splitlines()
-
-    # Rewrite existing keys in place; append whatever is left under the section.
-    remaining = dict(merged)
-    out = []
-    in_section = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            if in_section and remaining:
-                for k, v in remaining.items():
-                    out.append(f"{k}={v}")
-                remaining = {}
-            in_section = (stripped[1:-1] == INI_SECTION)
-            out.append(line)
-            continue
-        if in_section and "=" in stripped:
-            key = stripped.split("=", 1)[0].strip()
-            if key in remaining:
-                out.append(f"{key}={remaining.pop(key)}")
-                continue
-        out.append(line)
-
-    if not any(l.strip() == f"[{INI_SECTION}]" for l in out):
-        out.insert(0, f"[{INI_SECTION}]")
-        in_section = True
-    if remaining:
-        # Append to the end of the section (or the file, if it was the last one).
-        for k, v in remaining.items():
-            out.append(f"{k}={v}")
-
-    with open(dest, "w", encoding="utf-8") as f:
-        f.write("\n".join(out) + "\n")
-    return dest
+    merged.update(BASE_OVERRIDES)
+    merged.update(overrides or {})
+    return JRS.seed_ini(dest, merged)
 
 
 def launch_jimmy(ini_path):
@@ -926,7 +866,7 @@ def main():
     print("=" * 70)
     print(f"  Jimmy:    {JIMMY_EXE}")
     print(f"  Test DB:  {os.environ['JIMMY_TEST_DB_PATH']}")
-    print(f"  Seed INI: {real_ini_path()} (read only, never written)")
+    print(f"  Seed INI: {JRS.real_ini_path()} (read only, never written)")
     print(f"  Scenarios: {len(SCENARIOS)}")
 
     total_passed = 0
