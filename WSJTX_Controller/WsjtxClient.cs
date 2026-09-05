@@ -1596,7 +1596,17 @@ namespace WSJTX_Controller
             // NextCall's dispatch clears txTimeout/xmitCycleCount exactly as an operator
             // selection would; if it aborts (queue emptied first) the next decode cycle
             // falls through to CheckNextXmit as usual.
-            bool autoReplySelect = ctrl.AutoReply.Enabled && ctrl.AutoReply.ReplyToCqCallers
+            // Deliberately NOT gated on ReplyToCqCallers. That option governs ADMISSION --
+            // whether stations calling CQ are allowed into the queue at all -- and it is
+            // already applied in AddSelectedCall. Reusing it here as well meant that with
+            // it switched off (the natural setting for Call CQ: work whoever answers me,
+            // don't go hunting) nothing was ever selected, so a station answering our own
+            // CQ sat in the queue tagged "to you" while Jimmy carried on calling CQ over
+            // it until the entry aged out. Reported on air 2026-09-05 with IZ4JMA.
+            //
+            // Whatever reaches the queue is by definition something the operator wants
+            // worked, so selection only has to ask whether Jimmy is free to call it.
+            bool autoReplySelect = ctrl.AutoReply.Enabled
                                    && callInProg == null
                                    && callQueue.Count > 0
                                    // cqPaused is about CQ calling, not about Listen mode, where it

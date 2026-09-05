@@ -529,20 +529,37 @@ def scenario_mode_off(sock, v):
 
 
 def scenario_cq_callers_off(sock, v):
-    """Mode on, 'reply to CQ callers' off: work only stations that called us."""
+    """Mode on, 'reply to CQ callers' off: work only stations that called us.
+
+    This scenario used to stop at admission, and that blind spot let a real bug
+    through: selection was gated on the same option, so with it off a station
+    answering our CQ was admitted, tagged "to you", and then never called --
+    Jimmy just went on calling CQ over it until the entry aged out (IZ4JMA,
+    on air 2026-09-05). Asserting what enters the queue is not enough; the
+    decode cycle has to be driven so the transmit decision is exercised too.
+    """
     JR.send(sock,
             "CQ from another station: CQ W7CQOFF EM63",
             "'Reply to stations calling CQ' is off, so this must NOT queue",
-            JR.build_enqueue("CQ W7CQOFF EM63"),
+            JR.build_enqueue("CQ W7CQOFF EM63",
+                             since_midnight_ms=now_since_midnight_ms()),
             verify_fn=lambda: v.check_queue_not_contains(
                 "W7CQOFF", "AR07: CQ caller not queued when that option is off"))
 
     JR.send(sock,
             f"Station answering our CQ: {JR.MY_CALL} W7MINE EM63",
             "'Reply to stations answering my CQ' is on, so this MUST queue",
-            JR.build_enqueue(f"{JR.MY_CALL} W7MINE EM63"),
+            JR.build_enqueue(f"{JR.MY_CALL} W7MINE EM63",
+                             since_midnight_ms=now_since_midnight_ms()),
             verify_fn=lambda: v.check_queue_contains(
                 "W7MINE", "AR08: station answering our CQ still queued"))
+
+    drive_decode_cycle(sock)
+
+    v.check_queue_not_contains(
+        "W7MINE", "AR45: our caller auto-selected even with 'reply to CQ callers' off")
+    check_status_contains_nospace(
+        v, "W7MINE", "AR46: status announces the caller Jimmy is now working")
 
 
 def scenario_min_snr(sock, v):
