@@ -508,7 +508,7 @@ def build_heartbeat():
 
 
 def build_status(check="", tx_halt_clk=False, tx_enable_button=False, tx_enable_clk=False,
-                 decoding=False):
+                 decoding=False, transmitting=False, last_tx_msg=""):
     # TxFirst=False → Jimmy transmits in odd periods, receives in even.
     # SinceMidnight=0ms in decode messages (even period) matches this.
     #
@@ -521,6 +521,12 @@ def build_status(check="", tx_halt_clk=False, tx_enable_button=False, tx_enable_
     # eventually run ProcessDecodes -- the transmit-decision path, which nothing
     # else in this file reaches. Defaults to False so every existing test sends
     # exactly the bytes it did before.
+    #
+    # transmitting drives ProcessTxStart/ProcessTxEnd the same way, and last_tx_msg
+    # is what Jimmy reads back as the message it just sent. Together they let a test
+    # run out a station's transmit repeats and reach the timeout, which is otherwise
+    # unreachable: with no real WSJT-X nothing ever transmits, so xmitCycleCount
+    # never advances and Tx is never paused. Both default to the old values.
     return (
         MAGIC + _u32(2) + _u32(MSG_STATUS) +
         _qstr(WSJT_ID) +
@@ -530,7 +536,7 @@ def build_status(check="", tx_halt_clk=False, tx_enable_button=False, tx_enable_
         _qstr("-05") +           # Report
         _qstr("FT8") +           # Tx mode
         _flag(False) +           # Tx enabled
-        _flag(False) +           # Transmitting
+        _flag(transmitting) +    # Transmitting
         _flag(decoding) +        # Decoding
         _u32(1500) +             # Rx DF
         _u32(1500) +             # Tx DF
@@ -544,7 +550,7 @@ def build_status(check="", tx_halt_clk=False, tx_enable_button=False, tx_enable_
         _u32(0xFFFFFFFF) +       # Result code (N/A)
         _u32(15) +               # T/R period: 15 s (FT8)
         _qstr("Default") +       # Config name
-        _qstr("") +              # Last Tx msg
+        _qstr(last_tx_msg) +     # Last Tx msg
         _u32(0) +                # QSO progress: CALLING
         _flag(False) +           # TxFirst: False → Jimmy TX in odd periods
         _flag(False) +           # DblClk
@@ -1614,9 +1620,16 @@ def main():
     print(f"  myCall={MY_CALL}  myGrid={MY_GRID}")
     print()
 
-    # Locate Jimmy's controls before opening socket
+    # Locate Jimmy's controls before opening socket. Retried rather than probed
+    # once: when this script launches Jimmy itself, how long the window takes to
+    # come up varies, and a verifier built a moment too early made the whole run
+    # print "all assertions skipped" -- which reads like a pass but tested nothing.
     print("  Locating Jimmy controls via Win32...")
     v = JimmyVerifier()
+    deadline = time.time() + 25.0
+    while not v.available and time.time() < deadline:
+        time.sleep(1.0)
+        v = JimmyVerifier()
     if v.available:
         print(f"  ✓ Found Jimmy window, statusText, callListBox, logListBox")
         print(f"    Current status: '{v.status_text()}'")

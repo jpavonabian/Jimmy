@@ -276,6 +276,10 @@ namespace WSJTX_Controller
         private string discardCall = null;
         private string expiredCall = null;
         private int discardCallCycleCount = 0;
+        // Silent cycles before Simple Autoreply gives a stalled slot up early. Two, not
+        // one: a single dead cycle is normal QSB, and abandoning on it would throw away
+        // exactly the marginal DX this mode is meant to work.
+        private const int AutoReplyStalledCycles = 2;
 
         //for status display only
         private string curTxPayload = null;
@@ -1556,6 +1560,37 @@ namespace WSJTX_Controller
             }
 
             if (discardCall != null && discardCall == callInProg && ++discardCallCycleCount >= maxDiscardCount) DiscardCall();
+
+            // ── Simple Autoreply: cut the post-timeout wait short when others wait ──
+            // After a transmit timeout Jimmy holds callInProg for maxDiscardCount cycles
+            // in case the station comes back: discardCallCycleCount is reset by any
+            // transmission to it (Tx start) and by any decode from it (ProcessDecodeMsg),
+            // so a live exchange never trips this -- only a genuinely silent slot does.
+            //
+            // That wait earns its keep when there is nothing else to do. It is dead time
+            // when the queue is full and Jimmy is choosing on its own. Observed on air
+            // 2026-09-05: SM6TIJ held the slot 4m15s, the last 1m45s of it after Jimmy had
+            // already stopped transmitting, while six new DXCC entities sat in the queue.
+            //
+            // Nothing is thrown away. If the station reappears it re-enters the queue
+            // through the normal path and is selected on rank like any other; the previous
+            // exchange survives in allCallDict, which DiscardCall does not touch.
+            //
+            // Requires callInProg to be out of the queue: back in it, the resume branch
+            // below is the better answer and must win. The txMode/txEnabled test mirrors
+            // DiscardCall's own guard -- without it DiscardCall clears its bookkeeping
+            // without clearing callInProg, which would strand the slot for good.
+            if (ctrl.AutoReply.Enabled
+                && callInProg != null
+                && discardCall == callInProg
+                && discardCallCycleCount >= AutoReplyStalledCycles
+                && callQueue.Count > 0
+                && !callQueue.Contains(callInProg)
+                && ((txMode == TxModes.LISTEN && !txEnabled) || txMode == TxModes.CALL_CQ))
+            {
+                DebugOutput($"{spacer}Simple Autoreply: '{callInProg}' silent {discardCallCycleCount} cycles, {callQueue.Count} waiting -- discarding early");
+                DiscardCall();
+            }
 
             if (restartQueue) 
             {

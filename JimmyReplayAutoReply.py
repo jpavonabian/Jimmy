@@ -225,6 +225,29 @@ def now_since_midnight_ms(period_ms=15000):
     return (ms // period_ms) * period_ms
 
 
+def drive_tx_cycle(sock, tx_msg, on_air=12.0, settle=1.5):
+    """Run one transmit period so Jimmy counts a repeat towards the timeout.
+
+    Jimmy detects transmit start and end from the Transmitting flag changing in a
+    StatusMessage (WsjtxClient.Protocol.cs), and reads back what it sent from
+    LastTxMsg. Without this the transmit timeout is unreachable in replay: nothing
+    ever transmits, xmitCycleCount never advances, and Tx is never paused -- which
+    is precisely the state the post-timeout grace window lives in.
+
+    on_air has to be long enough to look like a real transmission. ProcessTxEnd
+    measures how long the carrier was up and writes off anything under 11s on FT8
+    as "shortTx" -- an interruption, not a completed over -- and an interrupted
+    over does not count towards the repeat limit. A 1s pulse looked like five
+    transmissions to the test and like none at all to Jimmy.
+    """
+    sock.sendto(JR.build_status(transmitting=True, last_tx_msg=tx_msg),
+                (JR.JIMMY_HOST, JR.JIMMY_PORT))
+    time.sleep(on_air)
+    sock.sendto(JR.build_status(transmitting=False, last_tx_msg=tx_msg),
+                (JR.JIMMY_HOST, JR.JIMMY_PORT))
+    time.sleep(settle)
+
+
 def drive_decode_cycle(sock, settle=20.0):
     """Run one WSJT-X decode cycle so Jimmy reaches ProcessDecodes.
 
@@ -804,6 +827,53 @@ def scenario_new_dxcc_unconfirmed(sock, v):
                 "EA9DONE", "AR44: fully-confirmed entity NOT queued (not-confirmed scope)"))
 
 
+def scenario_stalled_slot(sock, v):
+    """A silent slot must not block the queue while other stations wait.
+
+    One station is auto-selected and then never says another word; a second waits
+    behind it. Master holds the first for maxDiscardCount cycles (transmit repeats
+    + 2) before letting go. With Simple Autoreply on, Jimmy gives a silent slot up
+    after AutoReplyStalledCycles when there is something else to work.
+
+    Reaching that state needs the transmit timeout to fire first -- the grace
+    window only exists once Jimmy has stopped transmitting -- so this drives real
+    transmit periods, not just decode cycles.
+    """
+    JR.send(sock,
+            "CQ from the station that will go quiet: CQ W7QUIET EM63",
+            "Top of the queue, so it is the one auto-selected",
+            JR.build_enqueue("CQ W7QUIET EM63", since_midnight_ms=now_since_midnight_ms()),
+            verify_fn=lambda: v.check_queue_contains(
+                "W7QUIET", "AR47: first station admitted"))
+
+    drive_decode_cycle(sock)
+    v.check_queue_not_contains(
+        "W7QUIET", "AR48: first station auto-selected and now the call in progress")
+
+    JR.send(sock,
+            "CQ from a second station: CQ W7WAITS EM63",
+            "Queued behind the silent one",
+            JR.build_enqueue("CQ W7WAITS EM63", since_midnight_ms=now_since_midnight_ms()),
+            verify_fn=lambda: v.check_queue_contains(
+                "W7WAITS", "AR49: second station queued while the first is worked"))
+
+    # Run out the transmit repeats against a station that never answers. The seeded
+    # settings pin Limit Tx repeats to 3 with Optimize off, so maxTxRepeat is 3.
+    print("        (running out the transmit repeats so the timeout fires...)")
+    for _ in range(4):
+        drive_tx_cycle(sock, f"W7QUIET {JR.MY_CALL} {JR.MY_GRID}")
+
+    # Now silent cycles accumulate against the stalled slot.
+    for _ in range(3):
+        drive_decode_cycle(sock, settle=17.0)
+
+    check_status_contains_nospace(
+        v, "W7WAITS", "AR50: silent slot given up, waiting station now being worked")
+    v.check_queue_not_contains(
+        "W7WAITS", "AR51: the waiting station left the queue as the new call in progress")
+
+
+
 SCENARIOS = [
     ("open", "mode on, no filters -- replies to everyone",
      {}, scenario_open),
@@ -846,6 +916,8 @@ SCENARIOS = [
      {"autoReplySimpleNewDxccOnly": "True",
       "autoReplySimpleNewDxccScope": "NEW_OR_UNCONFIRMED"},
      scenario_new_dxcc_unconfirmed),
+    ("stalled-slot", "mode on -- a silent slot is given up while others wait",
+     {}, scenario_stalled_slot),
 ]
 
 

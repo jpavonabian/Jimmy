@@ -54,7 +54,9 @@ if not %ERRORLEVEL%==0 (
     rem Launching via PowerShell (needed to capture the PID for cleanup below) adds a
     rem little startup latency versus the old plain "start" -- give the window extra
     rem time to come up so JimmyVerifier's Win32 window search doesn't miss it.
-    timeout /t 5 /nobreak >nul
+    rem 5s was not enough on a cold start: the suite then ran its whole sequence with
+    rem no verifier and reported "all assertions skipped", which reads like a pass.
+    timeout /t 15 /nobreak >nul
 ) else (
     echo NOTE: Jimmy.exe is already running. This script cannot confirm that
     echo instance was started with JIMMY_TEST_DB_PATH set. If you started it
