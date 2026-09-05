@@ -57,7 +57,9 @@ MAIN_SUITE_PINS = {
     "removeOnWeakSnr": "True",
     # Directed CQ alerts the suite expects to be recognised (T08 POTA, T17 SOTA).
     "useAlertDirected": "True",
-    "alertDirecteds": "POTA,SOTA",
+    # Space separated, not comma: Controller.ReplyDirCqEntries splits on ' ', so
+    # "POTA,SOTA" is one token that matches neither and the alerts never fire.
+    "alertDirecteds": "POTA SOTA",
     # Auto-frequency off: with it on, Jimmy asks about transmit-slot analysis in
     # a modal dialog instead of switching mode.
     "bestOffset": "False",
