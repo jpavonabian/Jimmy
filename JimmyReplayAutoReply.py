@@ -874,6 +874,52 @@ def scenario_stalled_slot(sock, v):
 
 
 
+def scenario_busy_station(sock, v):
+    """Overs sent to a station that is working somebody else must not be charged
+    against the retry limit.
+
+    Calling a station finishing a QSO is normal FT8 practice -- you join its queue.
+    Counting those overs is not: the station cannot answer until it is done, so the
+    limit expires exactly as it becomes free. Seen on air as "7Z1BQ working AE4IN,
+    sending IM67" with the counter advancing.
+
+    The seed pins Limit Tx repeats to 3, so four overs would time the station out
+    on master. Here three are skipped (capped at maxTxRepeat) and only the fourth
+    counts, so the QSO is still alive and the waiting station untouched.
+    """
+    JR.send(sock,
+            "CQ from the station we will call: CQ W7BUSY EM63",
+            "Top of the queue, so it is the one auto-selected",
+            JR.build_enqueue("CQ W7BUSY EM63", since_midnight_ms=now_since_midnight_ms()),
+            verify_fn=lambda: v.check_queue_contains(
+                "W7BUSY", "AR52: station admitted"))
+
+    drive_decode_cycle(sock)
+    v.check_queue_not_contains(
+        "W7BUSY", "AR53: station auto-selected and now the call in progress")
+
+    JR.send(sock,
+            "CQ from a second station: CQ W7NEXT EM63",
+            "Waits behind; if Jimmy times the first one out it will switch to this",
+            JR.build_enqueue("CQ W7NEXT EM63", since_midnight_ms=now_since_midnight_ms()),
+            verify_fn=lambda: v.check_queue_contains(
+                "W7NEXT", "AR54: second station queued"))
+
+    # Four overs, each preceded by a decode showing W7BUSY mid-QSO with AE4IN.
+    print("        (four overs while the station is visibly working someone else...)")
+    for _ in range(4):
+        sock.sendto(JR.build_enqueue("AE4IN W7BUSY -05",
+                                     since_midnight_ms=now_since_midnight_ms()),
+                    (JR.JIMMY_HOST, JR.JIMMY_PORT))
+        time.sleep(1.5)
+        drive_tx_cycle(sock, f"W7BUSY {JR.MY_CALL} {JR.MY_GRID}")
+
+    check_status_contains_nospace(
+        v, "W7BUSY", "AR55: still working the busy station, retries not spent")
+    v.check_queue_contains(
+        "W7NEXT", "AR56: the waiting station was not promoted, so nothing timed out")
+
+
 SCENARIOS = [
     ("open", "mode on, no filters -- replies to everyone",
      {}, scenario_open),
@@ -918,6 +964,8 @@ SCENARIOS = [
      scenario_new_dxcc_unconfirmed),
     ("stalled-slot", "mode on -- a silent slot is given up while others wait",
      {}, scenario_stalled_slot),
+    ("busy-station", "mode on -- overs to a busy station do not spend retries",
+     {}, scenario_busy_station),
 ]
 
 

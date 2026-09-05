@@ -101,11 +101,15 @@ namespace WSJTX_Controller
                     {
                         toCallStatus = "ready";
                         callInProgLastActivity = isCq ? "calling CQ" : "sent 73";
+                        callInProgBusy = false;
                     }
                     else
                     {
                         toCallStatus = "busy";
                         callInProgLastActivity = $"working {toCall}";
+                        // Durable copy for ProcessTxEnd's retry accounting -- toCallStatus
+                        // itself is a one-shot display flag that ShowStatus wipes.
+                        callInProgBusy = true;
                     }
 
                     DebugOutput($"{spacer}AddSelectedCall toCallStatus:{toCallStatus} activity:{callInProgLastActivity}");

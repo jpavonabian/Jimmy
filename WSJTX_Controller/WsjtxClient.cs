@@ -310,6 +310,11 @@ namespace WSJTX_Controller
         private bool txEnableChanged = false;
         private bool promptsChanged = false;
         private string toCallStatus = null;
+        // Whether the last decode from callInProg showed it working somebody else.
+        // Kept separate from toCallStatus, which ShowStatus clears on every render and
+        // is therefore already gone by the time ProcessTxEnd would read it.
+        private bool callInProgBusy = false;
+        private int callInProgBusySkips = 0;
         private string callInProgLastActivity = null;
         private bool newPskReporter = false;
 
@@ -1955,6 +1960,30 @@ namespace WSJTX_Controller
                 {
                     if (!isCq)        //don't count CQ (or non-std) calls
                     {
+                        // ── Simple Autoreply: don't spend a retry on a station we can see
+                        // is mid-QSO with somebody else ──────────────────────────────────
+                        // Calling a station that is finishing a contact is ordinary FT8
+                        // practice -- you join its queue and it works you next. What is not
+                        // reasonable is counting those overs against the retry limit: the
+                        // station cannot answer until it is done, so the limit runs out
+                        // precisely as it becomes free. Observed on air: "7Z1BQ working
+                        // AE4IN, sending IM67" while the counter advanced.
+                        //
+                        // So keep transmitting -- the place in its queue is the whole point
+                        // -- but do not charge the attempt. Capped at maxTxRepeat skips so a
+                        // permanently busy station cannot hold the slot indefinitely;
+                        // maxDiscardCount cannot cover that case, because it resets on every
+                        // decode from the station and a busy one is decoding constantly.
+                        if (ctrl.AutoReply.Enabled && callInProgBusy && callInProgBusySkips < maxTxRepeat)
+                        {
+                            callInProgBusySkips++;
+                            callInProgBusy = false;     //consume: re-observed each receive window
+                            DebugOutput($"{spacer}Simple Autoreply: '{toCall}' busy with another station, retry not counted ({callInProgBusySkips}/{maxTxRepeat} skipped, xmitCycleCount stays {xmitCycleCount})");
+                            UpdateDebug();
+                            return;
+                        }
+                        callInProgBusy = false;
+
                         xmitCycleCount++;           //count xmits to same call sign at end of xmit cycle
                         DebugOutput($"{spacer}(same msg, or maxTxRepeat = 1) xmitCycleCount:{xmitCycleCount} txMsg:'{txMsg}' lastTxMsg:'{lastTxMsg}'");
                         DebugOutput($"{spacer}holdCheckBox.Checked:{ctrl.holdCheckBox.Checked} holdMaxTxRepeat:{holdMaxTxRepeat}");
@@ -2820,6 +2849,10 @@ namespace WSJTX_Controller
         {
             ctrl.holdCheckBox.Enabled = (call != null);
             DebugOutput($"{spacer}SetCallInProg: callInProg:'{CallPriorityString(call)}' (was '{CallPriorityString(callInProg)}') holdCheckBox.Enabled:{ctrl.holdCheckBox.Enabled}");
+
+            //busy accounting belongs to one station only -- never carry it to the next
+            callInProgBusy = false;
+            callInProgBusySkips = 0;
 
             if (call != null) lCall = null;     //last logged call is not relevant now
 
